@@ -1,0 +1,371 @@
+## Directory: glue_etl_project
+
+# config.py
+
+import os
+
+INPUT_PATH = os.getenv("INPUT_PATH", "s3://my-bucket/input-data/")
+OUTPUT_PATH = os.getenv("OUTPUT_PATH", "s3://my-bucket/output-data/")
+
+
+# glue_job.py
+
+import sys
+from awsglue.utils import getResolvedOptions
+from extract.s3_reader import read_s3_data
+from transform.data_cleaning import clean_data
+from transform.data_enrichment import enrich_data
+from load.s3_writer import write_to_s3
+
+from awsglue.context import GlueContext
+from pyspark.context import SparkContext
+
+from config import INPUT_PATH, OUTPUT_PATH
+
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
+
+
+def main():
+    # Step 1: Extract
+    df_raw = read_s3_data(glueContext, INPUT_PATH)
+
+    # Step 2: Transform
+    df_clean = clean_data(df_raw)
+    df_final = enrich_data(df_clean)
+
+    # Step 3: Load
+    write_to_s3(df_final, OUTPUT_PATH)
+
+
+if __name__ == "__main__":
+    main()
+
+
+# extract/s3_reader.py
+
+def read_s3_data(glueContext, path):
+    return glueContext.create_dynamic_frame.from_options(
+        connection_type="s3",
+        connection_options={"paths": [path]},
+        format="parquet"
+    ).toDF()
+
+
+# transform/data_cleaning.py
+
+def clean_data(df):
+    return df.dropna().dropDuplicates()
+
+
+# transform/data_enrichment.py
+
+from pyspark.sql.functions import current_timestamp
+
+def enrich_data(df):
+    return df.withColumn("processed_time", current_timestamp())
+
+
+# load/s3_writer.py
+
+def write_to_s3(df, output_path):
+    df.write.mode("overwrite").parquet(output_path)
+
+
+# tests/test_transform.py
+
+def test_clean_data(spark_session):
+    from transform.data_cleaning import clean_data
+    df = spark_session.createDataFrame([
+        (1, "Alice"),
+        (2, None),
+        (1, "Alice")
+    ], ["id", "name"])
+    cleaned = clean_data(df)
+    assert cleaned.count() == 1
+
+def test_enrich_data(spark_session):
+    from transform.data_enrichment import enrich_data
+    df = spark_session.createDataFrame([(1, "Alice")], ["id", "name"])
+    enriched = enrich_data(df)
+    assert "processed_time" in enriched.columns
+
+
+# conftest.py
+import pytest
+from pyspark.sql import SparkSession
+
+@pytest.fixture(scope="session")
+def spark_session():
+    return SparkSession.builder \
+        .appName("GlueTest") \
+        .master("local[1]") \
+        .getOrCreate()
+
+
+# requirements.txt
+boto3
+pyarrow
+pyspark==3.4.1
+pytest
+awswrangler
+
+
+# README.md
+# Glue ETL Project (Modularized)
+
+This project demonstrates a modular ETL job using AWS Glue and PySpark, with clear separation of concerns across extract, transform, and load stages.
+
+## 📁 Folder Structure
+```
+glue_etl_project/
+├── config.py
+├── glue_job.py
+├── extract/
+│   └── s3_reader.py
+├── transform/
+│   ├── data_cleaning.py
+│   └── data_enrichment.py
+├── load/
+│   └── s3_writer.py
+├── tests/
+│   └── test_transform.py
+├── conftest.py
+├── requirements.txt
+├── README.md
+├── .gitignore
+├── Makefile
+├── cfn_glue_etl.yml
+└── terraform/
+    └── main.tf
+```
+
+## 🚀 How to Run
+
+1. **Install dependencies:**
+```bash
+pip install -r requirements.txt
+```
+
+2. **Run locally with PySpark:**
+```bash
+export INPUT_PATH="s3://your-bucket/input/"
+export OUTPUT_PATH="s3://your-bucket/output/"
+python glue_job.py
+```
+
+3. **Run tests:**
+```bash
+pytest tests/
+```
+
+## ☁️ Deploy with AWS CloudFormation
+Use `cfn_glue_etl.yml` to deploy Glue Job and supporting resources. Example:
+```bash
+aws cloudformation deploy \
+  --template-file cfn_glue_etl.yml \
+  --stack-name glue-etl-stack \
+  --capabilities CAPABILITY_IAM \
+  --parameter-overrides \
+    InputS3Path=s3://your-bucket/input/ \
+    OutputS3Path=s3://your-bucket/output/ \
+    ScriptLocation=s3://your-bucket/glue_etl_project/glue_job.py
+```
+
+## ☁️ Deploy with Terraform
+```bash
+cd terraform
+terraform init
+terraform apply -var input_s3_path="s3://your-bucket/input/" \
+                -var output_s3_path="s3://your-bucket/output/" \
+                -var script_location="s3://your-bucket/glue_etl_project/glue_job.py"
+```
+
+## 🧹 Make Targets
+```bash
+make install         # Install Python dependencies
+make test            # Run all PyTest unit tests
+make clean           # Remove __pycache__ and test cache
+make deploy-cfn      # Deploy stack using CloudFormation
+make deploy-tf       # Deploy stack using Terraform
+```
+
+## 🔍 Features
+- Modular Python structure for ETL steps
+- Pytest-based unit tests
+- Environment-configurable S3 paths
+- Compatible with AWS Glue Jobs or local PySpark
+
+---
+MIT License © 2025
+
+
+# .gitignore
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Pytest cache
+.cache/
+pytest_cache/
+
+# Environment files
+.env
+
+# Logs
+*.log
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+
+# Terraform
+terraform/.terraform/
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/.terraform.lock.hcl
+
+# VSCode settings
+.vscode/
+
+
+# Makefile
+.PHONY: install test clean deploy-cfn deploy-tf
+
+install:
+	pip install -r requirements.txt
+
+test:
+	pytest tests/
+
+clean:
+	find . -type d -name "__pycache__" -exec rm -r {} +
+	rm -rf .pytest_cache .cache
+
+deploy-cfn:
+	aws cloudformation deploy \
+		--template-file cfn_glue_etl.yml \
+		--stack-name glue-etl-stack \
+		--capabilities CAPABILITY_IAM \
+		--parameter-overrides \
+			InputS3Path=s3://your-bucket/input/ \
+			OutputS3Path=s3://your-bucket/output/ \
+			ScriptLocation=s3://your-bucket/glue_etl_project/glue_job.py
+
+deploy-tf:
+	cd terraform && terraform init && terraform apply \
+		-var input_s3_path="s3://your-bucket/input/" \
+		-var output_s3_path="s3://your-bucket/output/" \
+		-var script_location="s3://your-bucket/glue_etl_project/glue_job.py"
+
+
+# cfn_glue_etl.yml
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Glue ETL Job with modular Python code
+
+Parameters:
+  InputS3Path:
+    Type: String
+  OutputS3Path:
+    Type: String
+  ScriptLocation:
+    Type: String
+  GlueRoleName:
+    Type: String
+    Default: GlueETLJobRole
+
+Resources:
+  GlueRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref GlueRoleName
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+
+  GlueJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: ModularETLJob
+      Role: !GetAtt GlueRole.Arn
+      Command:
+        Name: glueetl
+        ScriptLocation: !Ref ScriptLocation
+        PythonVersion: 3
+      DefaultArguments:
+        --TempDir: !Sub 's3://aws-glue-temporary-${AWS::AccountId}-${AWS::Region}/temp/'
+        --INPUT_PATH: !Ref InputS3Path
+        --OUTPUT_PATH: !Ref OutputS3Path
+      GlueVersion: "4.0"
+      NumberOfWorkers: 2
+      WorkerType: G.1X
+
+
+# terraform/main.tf
+provider "aws" {
+  region = "us-east-1"
+}
+
+variable "input_s3_path" {}
+variable "output_s3_path" {}
+variable "script_location" {}
+
+resource "aws_iam_role" "glue_role" {
+  name = "GlueETLJobRole"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Principal = {
+        Service = "glue.amazonaws.com"
+      }
+      Effect = "Allow"
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "glue_policy" {
+  role       = aws_iam_role.glue_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole"
+}
+
+resource "aws_iam_role_policy_attachment" "s3_policy" {
+  role       = aws_iam_role.glue_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+}
+
+resource "aws_glue_job" "modular_etl" {
+  name     = "ModularETLJob"
+  role_arn = aws_iam_role.glue_role.arn
+
+  command {
+    name            = "glueetl"
+    script_location = var.script_location
+    python_version  = "3"
+  }
+
+  default_arguments = {
+    "--TempDir"     = "s3://aws-glue-temporary-${data.aws_caller_identity.current.account_id}-${data.aws_region.current.name}/temp/"
+    "--INPUT_PATH"  = var.input_s3_path
+    "--OUTPUT_PATH" = var.output_s3_path
+  }
+
+  glue_version     = "4.0"
+  number_of_workers = 2
+  worker_type       = "G.1X"
+}
+
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
